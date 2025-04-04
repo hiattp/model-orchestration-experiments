@@ -1,18 +1,31 @@
 [project]
-name = "semantic-kernel-poc"
+name = "model-orchestration-experiments"
 version = "0.1.0"
 description = ""
 authors = [
-    {name = "Laurentiu Diaconu",email = "ldiaconu@chathamfinancial.com"}
+    {name = "Laurentiu Diaconu", email = "ldiaconu@chathamfinancial.com"}
+]
+packages = [
+    { include = "model_orchestration_experiments" }
 ]
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "semantic-kernel (>=1.25.0,<2.0.0)",
     "dotenv (>=0.9.9,<0.10.0)",
-    "asyncio (>=3.4.3,<4.0.0)"
+    "asyncio (>=3.4.3,<4.0.0)",
+    "azure-ai-ml (>=1.26.1,<2.0.0)",
+    "azure-identity (>=1.21.0,<2.0.0)",
+    "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
+    "argparse (>=1.4.0,<2.0.0)"
 ]
 
+[tool.poetry.scripts]
+complete_chat_prompt = "model_orchestration_experiments.simple_chat_completion:handle_cli"
+analyze_document = "model_orchestration_experiments.simple_document_extraction_and_analysis:handle_cli"
+
+[tool.poetry.group.dev.dependencies]
+black = "^25.1.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
