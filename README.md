@@ -14,7 +14,7 @@ For experiments utilizing the Azure OpenAI Service, you will need the following 
 ❯ cat .env
 export AZURE_OPENAI_ENDPOINT="<your Azure OpenAI Service endpoint>"
 export AZURE_OPENAI_API_KEY="<one of your Azure OpenAI API Keys>"
-export AZURE_OPENAI_DEPLOYMENT_NAME="<the name of a model deployed in Azure AI Foundry that can be used for chat completion, e.g. 'gpt-4'>>"
+export AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME="<the name of a model deployed in Azure AI Foundry that can be used for chat completion, e.g. 'gpt-4'>>"
 ```
 
 For experiments utilizing the Azure AI Document Intelligence service, you will need the following environment variables:
