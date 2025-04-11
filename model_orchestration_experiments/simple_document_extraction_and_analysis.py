@@ -2,8 +2,9 @@ import os
 import sys
 import json
 
+import hashlib
+
 import asyncio
-import semantic_kernel as sk
 import argparse
 
 from dotenv import load_dotenv
@@ -15,15 +16,20 @@ from azure.core.credentials import AzureKeyCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
 from azure.ai.documentintelligence.models import AnalyzeDocumentRequest
 
-from semantic_kernel.memory.memory_store_base import MemoryStoreBase
-from semantic_kernel.connectors.memory.chroma import ChromaMemoryStore
+from semantic_kernel import Kernel as SemanticKernel
 from semantic_kernel.connectors.ai.open_ai import (
     AzureChatCompletion,
     AzureTextCompletion,
     AzureTextEmbedding,
 )
+from semantic_kernel.connectors.memory.chroma import ChromaMemoryStore
+from semantic_kernel.contents.chat_history import ChatHistory
+from semantic_kernel.core_plugins.text_memory_plugin import TextMemoryPlugin
+from semantic_kernel.functions import KernelArguments
+from semantic_kernel.memory.memory_store_base import MemoryStoreBase
 from semantic_kernel.memory.semantic_text_memory import SemanticTextMemory
-from semantic_kernel.memory.volatile_memory_store import VolatileMemoryStore
+from semantic_kernel.prompt_template import PromptTemplateConfig
+from semantic_kernel.prompt_template.input_variable import InputVariable
 
 from .utils import (
     make_experiment_run,
@@ -47,7 +53,7 @@ def _setup_document_intelligence_client() -> DocumentIntelligenceClient:
     )
 
 
-def _setup_semantic_kernel() -> sk.Kernel:
+def _setup_semantic_kernel() -> SemanticKernel:
     AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
     AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
     AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME = os.getenv(
@@ -57,7 +63,7 @@ def _setup_semantic_kernel() -> sk.Kernel:
         "AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME"
     )
 
-    kernel = sk.Kernel()
+    kernel = SemanticKernel()
 
     kernel.add_service(
         service=AzureTextEmbedding(
@@ -77,15 +83,19 @@ def _setup_semantic_kernel() -> sk.Kernel:
         )
     )
 
-    print(f"Kernel services: {kernel.services}")
+    # print(f"Kernel services: {kernel.services}")
 
     return kernel
 
 
-def _setup_memory_store() -> MemoryStoreBase:
+def _setup_memory_store(filepath: str) -> tuple[MemoryStoreBase, str]:
     chroma_client = HttpClient(host="localhost", port="8000")
-    _ = chroma_client.get_or_create_collection("lease_document")
-    return ChromaMemoryStore(client_settings=chroma_client.get_settings())
+    collection_name = hashlib.sha1(filepath.encode("utf-8")).hexdigest()
+    _ = chroma_client.get_or_create_collection(collection_name)
+    return (
+        ChromaMemoryStore(client_settings=chroma_client.get_settings()),
+        collection_name,
+    )
 
 
 def _parse_args(raw_args: list[str]):
@@ -148,6 +158,12 @@ def _print_extracted_data(data: dict):
             )
 
 
+def _print_chat_action(action: str, text: str):
+    DIVIDER = f"\n{'-' * 50}\n"
+    print(f"{DIVIDER}{action}:{DIVIDER}")
+    print(f"{text}")
+
+
 def extract_data_from_file(
     document_intelligence_client: DocumentIntelligenceClient,
     filepath: str,
@@ -162,7 +178,7 @@ def extract_data_from_file(
         )
         prior_experiment_run_output_file = f"{get_experiment_run_destination(EXPERIMENT_NAME, from_prior_experiment_run)}/results.json"
         result = _read_extracted_data(prior_experiment_run_output_file)
-        _print_extracted_data(result)
+        # _print_extracted_data(result)
     else:
         with open(filepath, "rb") as file:
             file_content = file.read()
@@ -173,7 +189,7 @@ def extract_data_from_file(
         )
 
         result = poller.result().as_dict()
-        _print_extracted_data(result)
+        # _print_extracted_data(result)
 
     if EXPERIMENT_SAVE_RESULTS:
         output_file = f"{output_destination}/results.json"
@@ -183,35 +199,83 @@ def extract_data_from_file(
     return output_file
 
 
-async def embed_extracted_data(filepath: str):
+async def add_memory(
+    kernel: SemanticKernel, filepath: str
+) -> tuple[SemanticTextMemory, str]:
     if not EXPERIMENT_SAVE_RESULTS:
         print(f"Data has to be saved before it can be embedded!")
+
+        return None, None
     else:
-        kernel = _setup_semantic_kernel()
-        memory_store = _setup_memory_store()
+        memory_store, collection_name = _setup_memory_store(filepath)
         memory = SemanticTextMemory(
             storage=memory_store,
             embeddings_generator=kernel.get_service(service_id="openai__embedder"),
         )
+
+        kernel.add_plugin(TextMemoryPlugin(memory), "TextMemoryPlugin")
 
         data = _read_extracted_data(filepath)
 
         for i, chunk in enumerate(data["paragraphs"]):
             if chunk["spans"][0]["length"] > 50:
                 await memory.save_information(
-                    collection="lease_document", id=f"chunk {i}", text=chunk["content"]
+                    collection=collection_name, id=f"chunk {i}", text=chunk["content"]
                 )
 
-        return memory
+        return memory, collection_name
 
 
-async def get_query_response(
-    memory: SemanticTextMemory, collection: str, query: str, limit: int
-):
-    results = await memory.search(collection=collection, query=query, limit=limit)
+async def chat(kernel: SemanticKernel, collection: str, query: str):
+    prompt_with_context_plugin = """
+        Use the following pieces of context to answer the users question.
+        This is the only information that you should use to answer the question, do not reference information outside of this context.
+        If the information required to answer the question is not provided in the context, just say that "I don't know", don't try to make up an answer.
+        ----------------
+        Context: {{recall $question}}
+        ----------------
+        User question: {{$question}}
+        ----------------
+        Answer:
+    """
 
-    for result in results:
-        print(f"Text: {result.text} \nRelevance: {result.relevance}")
+    target_service_id = "openai__chatter"
+
+    execution_config = kernel.get_service(
+        target_service_id
+    ).instantiate_prompt_execution_settings(
+        service_id=target_service_id, max_tokens=500, temperature=0, seed=42
+    )
+
+    prompt_template_config = PromptTemplateConfig(
+        template=prompt_with_context_plugin,
+        name="chat",
+        template_format="semantic-kernel",
+        input_variables=[
+            InputVariable(
+                name="question", description="The user input", is_required=True
+            ),
+            InputVariable(
+                name="context", description="The conversation history", is_required=True
+            ),
+        ],
+        execution_settings=execution_config,
+    )
+
+    chatbot_with_context_plugin = kernel.add_function(
+        prompt_template_config=prompt_template_config,
+        plugin_name="chatPluginWithContextPlugin",
+        function_name="chatbot_with_context_plugin",
+        execution_settings=execution_config,
+    )
+
+    context = KernelArguments(
+        question=query, collection=collection, relevance=0.2, limit=5
+    )
+    answer = await kernel.invoke(chatbot_with_context_plugin, context)
+
+    _print_chat_action("Question", query)
+    _print_chat_action("Answer", answer)
 
 
 def handle_cli():
@@ -224,6 +288,8 @@ def handle_cli():
         EXPERIMENT_NAME, EXPERIMENT_SAVE_RESULTS
     )
 
+    kernel = _setup_semantic_kernel()
+
     document_intelligence_client = _setup_document_intelligence_client()
     extracted_data_file = extract_data_from_file(
         document_intelligence_client,
@@ -232,15 +298,25 @@ def handle_cli():
         from_prior_experiment_run,
     )
 
-    memory = asyncio.run(embed_extracted_data(extracted_data_file))
+    _, collection = asyncio.run(add_memory(kernel, extracted_data_file))
 
+    # examples for a Lease Agreement document
     asyncio.run(
-        get_query_response(
-            memory,
-            "lease_document",
-            "What is the name of the premises/unit that the tenant is leasing?",
-            5,
+        chat(
+            kernel,
+            collection,
+            "What is the name of the tenant that entered the lease agreement?",
         )
+    )
+    asyncio.run(
+        chat(
+            kernel,
+            collection,
+            "What is the name of the space that the tenant is leasing?",
+        )
+    )
+    asyncio.run(
+        chat(kernel, collection, "What is the start date of the lease agreement?")
     )
 
     end_experiment_run(EXPERIMENT_NAME, experiment_run)

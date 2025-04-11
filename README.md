@@ -58,12 +58,23 @@ poetry run complete_chat_prompt -i Paris
 
 Requirements:
 - Azure AI Document Intelligence service credentials
+- [ChromaDB](https://www.trychroma.com/)
 
 This is a simple experiment showcasing:
 - the extraction of data from a PDF document using [layout-aware extraction](https://learn.microsoft.com/en-us/azure/ai-services/document-intelligence/prebuilt/layout?view=doc-intel-4.0.0&tabs=rest%2Csample-code)
 - the interpretation of the extracted data using a Chat Completion service
 
 Usage:
+
+Before progressing with the actual analysis, an instance of ChromaDB must be running on the local host. For this, you could either start it via the `poetry` virtual environment:
+
+```sh
+poetry run chroma run --path /path/to/where/chromadb/data/should/be/saved
+```
+
+Or [via a Docker Container](https://docs.trychroma.com/production/containers/docker).
+
+This experiment assumes the ChromaDB instance listens to port 8000.
 
 ```sh
 ❯ poetry run analyze_document -h
