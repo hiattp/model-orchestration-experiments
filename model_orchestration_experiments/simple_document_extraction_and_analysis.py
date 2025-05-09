@@ -56,8 +56,8 @@ def _setup_document_intelligence_client() -> DocumentIntelligenceClient:
 def _setup_semantic_kernel() -> SemanticKernel:
     AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
     AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-    AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME = os.getenv(
-        "AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME"
+    AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME = os.getenv(
+        "AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME"
     )
     AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME = os.getenv(
         "AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME"
@@ -77,7 +77,7 @@ def _setup_semantic_kernel() -> SemanticKernel:
     kernel.add_service(
         service=AzureChatCompletion(
             service_id="openai__chatter",
-            deployment_name=AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME,
+            deployment_name=AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME,
             endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_API_KEY,
         )
@@ -217,11 +217,38 @@ async def add_memory(
 
         data = _read_extracted_data(filepath)
 
+        accumulating_text = ""
+        prior_chunk_page_number = None
+        accumulating_from_chunk_number = None
+
         for i, chunk in enumerate(data["paragraphs"]):
-            if chunk["spans"][0]["length"] > 50:
+            if (
+                chunk["spans"][0]["length"] > 100
+                or prior_chunk_page_number != chunk["boundingRegions"][0]["pageNumber"]
+            ):
+                if accumulating_text != "":
+                    await memory.save_information(
+                        collection=collection_name,
+                        id=f"chunk {accumulating_from_chunk_number}",
+                        text=accumulating_text,
+                    )
+                    accumulating_text = ""
+                    accumulating_from_chunk_number = None
                 await memory.save_information(
                     collection=collection_name, id=f"chunk {i}", text=chunk["content"]
                 )
+            else:
+                accumulating_text = accumulating_text + "\n" + chunk["content"]
+                accumulating_from_chunk_number = i
+
+            prior_chunk_page_number = chunk["boundingRegions"][0]["pageNumber"]
+
+        if accumulating_text != "":
+            await memory.save_information(
+                collection=collection_name,
+                id=f"chunk {accumulating_from_chunk_number}",
+                text=accumulating_text,
+            )
 
         return memory, collection_name
 
@@ -300,23 +327,41 @@ def handle_cli():
 
     _, collection = asyncio.run(add_memory(kernel, extracted_data_file))
 
-    # examples for a Lease Agreement document
     asyncio.run(
         chat(
             kernel,
             collection,
-            "What is the name of the tenant that entered the lease agreement?",
+            """
+                Summarize in a table the key details of the lease agreement. I am going to provide you with the fields of the table that you must include. 
+                The field "Tenant Name" must be represented as a string. 
+                The field "Building Address" must be represented as a string and be a valid address. 
+                The field "Total Area (square feet)" must mean the total area/square footage of the premises located in the building and rented by the tenant.
+                The field "Start Date" must be represented as a date in the format YYYY-MM-DD and mean the date when the lease agreement commences.
+                The field "End Date" must be represented as a date in the format YYYY-MM-DD and mean the date when the lease agreement expires.
+                The field "Term in Months" must be represented as a number and mean the total duration of the lease agreement calculated in months.
+            """,
         )
     )
+
     asyncio.run(
         chat(
             kernel,
             collection,
-            "What is the name of the space that the tenant is leasing?",
+            """
+                Summarize in a table the charging schedule of the lease agreement. The fields of the table that you must include are listed below, together with their constraints that you must respect:
+                - From Date: Must be represented as a date in the format YYYY-MM-DD.
+                - To Date: Must be represented as a date in the format YYYY-MM-DD.
+                - Annualized Base Rent (USD): Must be represented as a number in USD.
+            """,
         )
     )
+
     asyncio.run(
-        chat(kernel, collection, "What is the start date of the lease agreement?")
+        chat(
+            kernel,
+            collection,
+            "Summarize in a table the key details of the termination or break options the tenant has. The fields of the table must be: Date of Notice, Date of Termination, Rent Penalty (USD), Trigger Reason.",
+        )
     )
 
     end_experiment_run(EXPERIMENT_NAME, experiment_run)

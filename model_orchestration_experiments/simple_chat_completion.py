@@ -21,8 +21,8 @@ EXPERIMENT_SAVE_RESULTS = False
 def _setup_kernel() -> sk.Kernel:
     AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
     AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-    AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME = os.getenv(
-        "AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME"
+    AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME = os.getenv(
+        "AZURE_OPENAI_DEPLOYMENT_NAME"
     )
 
     kernel = sk.Kernel()
@@ -30,7 +30,7 @@ def _setup_kernel() -> sk.Kernel:
     kernel.add_service(
         service=AzureChatCompletion(
             service_id="azure_openai__gpt4__chat_completion",
-            deployment_name=AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME,
+            deployment_name=AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME,
             endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_API_KEY,
         )
@@ -39,7 +39,7 @@ def _setup_kernel() -> sk.Kernel:
     kernel.add_service(
         service=AzureTextCompletion(
             service_id="azure_openai__gpt4__text_completion",
-            deployment_name=AZURE_OPENAI_MULTIMODAL_MODEL_DEPLOYMENT_NAME,
+            deployment_name=AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME,
             endpoint=AZURE_OPENAI_ENDPOINT,
             api_key=AZURE_OPENAI_API_KEY,
         )

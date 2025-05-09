@@ -177,6 +177,6 @@ pyrightconfig.json
 
 # Custom
 .DS_Store
-.env
+*.env
 data/*/*
 !data/*/.gitkeep
