@@ -22,6 +22,14 @@ from semantic_kernel.connectors.ai.open_ai import (
     AzureTextCompletion,
     AzureTextEmbedding,
 )
+from semantic_kernel.connectors.ai.google.google_ai import (
+    GoogleAIChatCompletion,
+    GoogleAITextEmbedding,
+)
+from semantic_kernel.connectors.ai.google.vertex_ai import (
+    VertexAIChatCompletion,
+    VertexAITextEmbedding,
+)
 from semantic_kernel.connectors.memory.chroma import ChromaMemoryStore
 from semantic_kernel.contents.chat_history import ChatHistory
 from semantic_kernel.core_plugins.text_memory_plugin import TextMemoryPlugin
@@ -35,6 +43,7 @@ from .utils import (
     make_experiment_run,
     end_experiment_run,
     get_experiment_run_destination,
+    bboxes_overlap,
 )
 
 EXPERIMENT_NAME = "SIMPLE_DOCUMENT_EXTRACTION_AND_ANALYSIS"
@@ -53,35 +62,85 @@ def _setup_document_intelligence_client() -> DocumentIntelligenceClient:
     )
 
 
-def _setup_semantic_kernel() -> SemanticKernel:
-    AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-    AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-    AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME = os.getenv(
-        "AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME"
-    )
-    AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME = os.getenv(
-        "AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME"
-    )
-
+def _setup_semantic_kernel(service: str) -> SemanticKernel:
     kernel = SemanticKernel()
 
-    kernel.add_service(
-        service=AzureTextEmbedding(
-            service_id="openai__embedder",
-            deployment_name=AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME,
-            endpoint=AZURE_OPENAI_ENDPOINT,
-            api_key=AZURE_OPENAI_API_KEY,
+    if service == "openai":
+        AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+        AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+        AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME = os.getenv(
+            "AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME"
         )
-    )
+        AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME = os.getenv(
+            "AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME"
+        )
+        kernel.add_service(
+            service=AzureTextEmbedding(
+                service_id="embedder",
+                deployment_name=AZURE_OPENAI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME,
+                endpoint=AZURE_OPENAI_ENDPOINT,
+                api_key=AZURE_OPENAI_API_KEY,
+            )
+        )
+        kernel.add_service(
+            service=AzureChatCompletion(
+                service_id="chatter",
+                deployment_name=AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME,
+                endpoint=AZURE_OPENAI_ENDPOINT,
+                api_key=AZURE_OPENAI_API_KEY,
+            )
+        )
+    elif service == "googleai":
+        GOOGLE_AI_GEMINI_API_KEY = os.getenv("GOOGLE_AI_GEMINI_API_KEY")
+        GOOGLE_AI_GEMINI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME = os.getenv(
+            "GOOGLE_AI_GEMINI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME"
+        )
+        GOOGLE_AI_GEMINI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME = os.getenv(
+            "GOOGLE_AI_GEMINI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME"
+        )
 
-    kernel.add_service(
-        service=AzureChatCompletion(
-            service_id="openai__chatter",
-            deployment_name=AZURE_OPENAI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME,
-            endpoint=AZURE_OPENAI_ENDPOINT,
-            api_key=AZURE_OPENAI_API_KEY,
+        kernel.add_service(
+            service=GoogleAITextEmbedding(
+                embedding_model_id=GOOGLE_AI_GEMINI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME,
+                api_key=GOOGLE_AI_GEMINI_API_KEY,
+                service_id="embedder",
+            )
         )
-    )
+        kernel.add_service(
+            service=GoogleAIChatCompletion(
+                gemini_model_id=GOOGLE_AI_GEMINI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME,
+                api_key=GOOGLE_AI_GEMINI_API_KEY,
+                service_id="chatter",
+            )
+        )
+    elif service == "vertexai":
+        VERTEX_AI_PROJECT_ID = os.getenv("VERTEX_AI_PROJECT_ID")
+        VERTEX_AI_REGION = os.getenv("VERTEX_AI_REGION")
+        VERTEX_AI_GEMINI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME = os.getenv(
+            "VERTEX_AI_GEMINI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME"
+        )
+        VERTEX_AI_GEMINI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME = os.getenv(
+            "VERTEX_AI_GEMINI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME"
+        )
+
+        kernel.add_service(
+            service=VertexAITextEmbedding(
+                project_id=VERTEX_AI_PROJECT_ID,
+                region=VERTEX_AI_REGION,
+                embedding_model_id=VERTEX_AI_GEMINI_TEXT_EMBEDDING_MODEL_DEPLOYMENT_NAME,
+                service_id="embedder",
+            )
+        )
+        kernel.add_service(
+            service=VertexAIChatCompletion(
+                project_id=VERTEX_AI_PROJECT_ID,
+                region=VERTEX_AI_REGION,
+                gemini_model_id=VERTEX_AI_GEMINI_CHAT_COMPLETION_MODEL_DEPLOYMENT_NAME,
+                service_id="chatter",
+            )
+        )
+    else:
+        raise RuntimeError("No model family to use!")
 
     # print(f"Kernel services: {kernel.services}")
 
@@ -100,6 +159,13 @@ def _setup_memory_store(filepath: str) -> tuple[MemoryStoreBase, str]:
 
 def _parse_args(raw_args: list[str]):
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "-s",
+        "--service",
+        required=True,
+        choices=["openai", "googleai", "vertexai"],
+        help="The AI Service to use",
+    )
     parser.add_argument(
         "-f",
         "--filepath",
@@ -200,55 +266,125 @@ def extract_data_from_file(
 
 
 async def add_memory(
-    kernel: SemanticKernel, filepath: str
+    kernel: SemanticKernel, output_destination: str, filepath: str
 ) -> tuple[SemanticTextMemory, str]:
     if not EXPERIMENT_SAVE_RESULTS:
         print(f"Data has to be saved before it can be embedded!")
-
         return None, None
     else:
         memory_store, collection_name = _setup_memory_store(filepath)
         memory = SemanticTextMemory(
             storage=memory_store,
-            embeddings_generator=kernel.get_service(service_id="openai__embedder"),
+            embeddings_generator=kernel.get_service(service_id="embedder"),
         )
-
         kernel.add_plugin(TextMemoryPlugin(memory), "TextMemoryPlugin")
-
         data = _read_extracted_data(filepath)
 
-        accumulating_text = ""
-        prior_chunk_page_number = None
-        accumulating_from_chunk_number = None
+        # Build a map of tables by page and their polygons (all polygons from all bounding regions)
+        tables_by_page = {}
+        table_polygons_by_page = {}
+        for table in data.get("tables", []):
+            for region in table.get("boundingRegions", []):
+                page = region["pageNumber"]
+                polygon = region.get("polygon")
+                if polygon:
+                    table_polygons_by_page.setdefault(page, []).append(polygon)
+            # For saving, still group tables by the first region's page
+            page = (
+                table["boundingRegions"][0]["pageNumber"]
+                if table.get("boundingRegions")
+                else 1
+            )
+            tables_by_page.setdefault(page, []).append(table)
 
-        for i, chunk in enumerate(data["paragraphs"]):
-            if (
-                chunk["spans"][0]["length"] > 100
-                or prior_chunk_page_number != chunk["boundingRegions"][0]["pageNumber"]
-            ):
-                if accumulating_text != "":
+        # Group paragraphs by page, skipping those that overlap with any table polygon on the same page
+        paragraphs_by_page = {}
+        for paragraph in data.get("paragraphs", []):
+            overlaps = False
+            for region in paragraph.get("boundingRegions", []):
+                page = region["pageNumber"]
+                paragraph_polygon = region.get("polygon")
+                if paragraph_polygon:
+                    for table_polygon in table_polygons_by_page.get(page, []):
+                        if bboxes_overlap(paragraph_polygon, table_polygon):
+                            overlaps = True
+                            break
+                if overlaps:
+                    break
+            if not overlaps and paragraph.get("boundingRegions"):
+                # Use the first region's page for grouping
+                page = paragraph["boundingRegions"][0]["pageNumber"]
+                paragraphs_by_page.setdefault(page, []).append(paragraph["content"])
+
+        # Prepare to save chunks to a JSON file
+        chunks = []
+
+        # Save paragraph chunks (grouped, max 2000 chars, do not split original paragraphs)
+        for page, paragraphs in paragraphs_by_page.items():
+            if paragraphs:
+                chunk = ""
+                chunk_idx = 0
+                for paragraph in paragraphs:
+                    if len(chunk) + len(paragraph) + 1 > 2000 and chunk:
+                        chunk_id = f"page_{page}_paragraphs_{chunk_idx}"
+                        await memory.save_information(
+                            collection=collection_name,
+                            id=chunk_id,
+                            text=chunk.strip(),
+                        )
+                        chunks.append(
+                            {
+                                "id": chunk_id,
+                                "type": "paragraphs",
+                                "page": page,
+                                "text": chunk.strip(),
+                            }
+                        )
+                        chunk = ""
+                        chunk_idx += 1
+                    if chunk:
+                        chunk += "\n"
+                    chunk += paragraph
+                if chunk:
+                    chunk_id = f"page_{page}_paragraphs_{chunk_idx}"
                     await memory.save_information(
                         collection=collection_name,
-                        id=f"chunk {accumulating_from_chunk_number}",
-                        text=accumulating_text,
+                        id=chunk_id,
+                        text=chunk.strip(),
                     )
-                    accumulating_text = ""
-                    accumulating_from_chunk_number = None
+                    chunks.append(
+                        {
+                            "id": chunk_id,
+                            "type": "paragraphs",
+                            "page": page,
+                            "text": chunk.strip(),
+                        }
+                    )
+
+        # Save tables (each table as a chunk)
+        for page, tables in tables_by_page.items():
+            for j, table in enumerate(tables):
+                rows = [[] for _ in range(table["rowCount"])]
+                for cell in table["cells"]:
+                    row_idx = cell["rowIndex"]
+                    col_idx = cell["columnIndex"]
+                    while len(rows[row_idx]) <= col_idx:
+                        rows[row_idx].append("")
+                    rows[row_idx][col_idx] = cell["content"].replace("\n", " ")
+                table_str = "\n".join("|".join(row) for row in rows)
+                chunk_id = f"page_{page}_table_{j}"
                 await memory.save_information(
-                    collection=collection_name, id=f"chunk {i}", text=chunk["content"]
+                    collection=collection_name,
+                    id=chunk_id,
+                    text=table_str,
                 )
-            else:
-                accumulating_text = accumulating_text + "\n" + chunk["content"]
-                accumulating_from_chunk_number = i
+                chunks.append(
+                    {"id": chunk_id, "type": "table", "page": page, "text": table_str}
+                )
 
-            prior_chunk_page_number = chunk["boundingRegions"][0]["pageNumber"]
-
-        if accumulating_text != "":
-            await memory.save_information(
-                collection=collection_name,
-                id=f"chunk {accumulating_from_chunk_number}",
-                text=accumulating_text,
-            )
+        chunks_file = f"{output_destination}/chunks.json"
+        with open(chunks_file, "w") as f:
+            json.dump(chunks, f)
 
         return memory, collection_name
 
@@ -266,7 +402,7 @@ async def chat(kernel: SemanticKernel, collection: str, query: str):
         Answer:
     """
 
-    target_service_id = "openai__chatter"
+    target_service_id = "chatter"
 
     execution_config = kernel.get_service(
         target_service_id
@@ -308,6 +444,7 @@ async def chat(kernel: SemanticKernel, collection: str, query: str):
 def handle_cli():
     load_dotenv()
     args = _parse_args(sys.argv[1:])
+    service = args.service
     filepath = args.filepath
     from_prior_experiment_run = args.from_prior_experiment_run
 
@@ -315,7 +452,7 @@ def handle_cli():
         EXPERIMENT_NAME, EXPERIMENT_SAVE_RESULTS
     )
 
-    kernel = _setup_semantic_kernel()
+    kernel = _setup_semantic_kernel(service)
 
     document_intelligence_client = _setup_document_intelligence_client()
     extracted_data_file = extract_data_from_file(
@@ -325,20 +462,23 @@ def handle_cli():
         from_prior_experiment_run,
     )
 
-    _, collection = asyncio.run(add_memory(kernel, extracted_data_file))
+    _, collection = asyncio.run(
+        add_memory(kernel, output_destination, extracted_data_file)
+    )
 
     asyncio.run(
         chat(
             kernel,
             collection,
             """
-                Summarize in a table the key details of the lease agreement. I am going to provide you with the fields of the table that you must include. 
-                The field "Tenant Name" must be represented as a string. 
-                The field "Building Address" must be represented as a string and be a valid address. 
-                The field "Total Area (square feet)" must mean the total area/square footage of the premises located in the building and rented by the tenant.
-                The field "Start Date" must be represented as a date in the format YYYY-MM-DD and mean the date when the lease agreement commences.
-                The field "End Date" must be represented as a date in the format YYYY-MM-DD and mean the date when the lease agreement expires.
-                The field "Term in Months" must be represented as a number and mean the total duration of the lease agreement calculated in months.
+                Summarize in a table the key details of the lease agreement. The columns of the table that you must include are listed below, together with some instructions and constraints:
+                - Tenant Name: this represents the name of the tenant entering the lease agreement
+                - Building Address: ensure it is a valid address
+                - Rentable Area: this represents the total area in square feet/total square footage of the premises being rented and you must ensure it is a number
+                - Unit: this represents the name of the premises or the term through which the premises is referred to
+                - Lease Start Date: you must ensure it is a date in the format YYYY-MM-DD
+                - Lease End Date: you must ensure it is a date in the format YYYY-MM-DD
+                - Term in Months: ensure it is a number
             """,
         )
     )
@@ -348,10 +488,11 @@ def handle_cli():
             kernel,
             collection,
             """
-                Summarize in a table the charging schedule of the lease agreement. The fields of the table that you must include are listed below, together with their constraints that you must respect:
-                - From Date: Must be represented as a date in the format YYYY-MM-DD.
-                - To Date: Must be represented as a date in the format YYYY-MM-DD.
-                - Annualized Base Rent (USD): Must be represented as a number in USD.
+                Summarize in a table the charging schedule of the lease agreement. The fields of the table that you must include are listed below, together with some of their constraints that you must respect:
+                - From Date: ensure it is a date in the format YYYY-MM-DD
+                - To Date: ensure it is a date in the format YYYY-MM-DD
+                - Monthly Base Rent: ensure it is a number
+                - Base Rent Currency: ensure it is a valid currency
             """,
         )
     )

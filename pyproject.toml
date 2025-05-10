@@ -19,6 +19,8 @@ dependencies = [
     "azure-ai-documentintelligence (>=1.0.2,<2.0.0)",
     "argparse (>=1.4.0,<2.0.0)",
     "chromadb (>=1.0.0,<2.0.0)",
+    "google-generativeai (>=0.8.5,<0.9.0)",
+    "vertexai (>=1.71.1,<2.0.0)",
 ]
 
 [tool.poetry.scripts]
